@@ -6,21 +6,23 @@ const { Engine, Render, Runner, World, Bodies, Body, Composite, Composites, Cons
 // Configuration
 const CONFIG = {
     zoom: 1,
-    pixelScale: 4,
     chunkWidth: 1000,
-    terrainRoughness: 150, // Much higher variability
-    terrainSmoothness: 0.002, // Lower frequency for larger hills
-    carSpeed: 0.15, // Significantly faster
-    jumpForce: 0.6, // Stronger jump (increased from 0.5)
+    terrainRoughness: 100,
+    terrainSmoothness: 0.003,
+    // Ball Physics
+    ballSize: 15,
+    ballSpeed: 0.4, // Faster max rolling speed
+    ballTorque: 0.5, // 10x torque for climbing power
+    jumpForce: 0.35,
 };
 
 // Global State
 let engine, world, runner;
 let renderCanvas, ctx;
-let carBody, carWheelB, carWheelF;
-let terrainBodies = [];
+let playerBody; // The rolling ball
+let terrainBodies = []; // Array of arrays (chunks of segments)
 let scrollOffset = 0;
-let lastTerrainX = -800; // Start back so car has ground
+let lastTerrainX = -800;
 let noiseSeed = Math.random() * 1000;
 
 // Audio Context
@@ -29,46 +31,37 @@ let engineOsc;
 let engineGain;
 
 function init() {
-    // 1. Setup Matter.js
     engine = Engine.create();
     world = engine.world;
-    engine.gravity.y = 2.0; // Stronger gravity for tighter controls
+    engine.gravity.y = 1.5;
 
-    // 2. Setup Canvas & Custom Renderer
     renderCanvas = document.createElement('canvas');
     ctx = renderCanvas.getContext('2d');
     document.body.appendChild(renderCanvas);
 
-    // Handle resize
     window.addEventListener('resize', handleResize);
     handleResize();
 
-    // 3. Create Objects
-    createCar(0, 0);
+    createPlayer(0, 0);
 
     // Initial Terrain
     for (let i = 0; i < 3; i++) {
         generateTerrainChunk();
     }
 
-    // 4. Input
+    // Input
     document.addEventListener('keydown', (e) => {
         if (e.code === 'Space') {
             jump();
-            initAudio(); // Resume audio context if suspended
+            initAudio();
         }
     });
-
     document.addEventListener('mousedown', initAudio);
 
-    // 5. Run Loop
     runner = Runner.create();
     Runner.run(runner, engine);
 
-    // Custom Render Loop
     requestAnimationFrame(renderLoop);
-
-    // Game Update Loop
     Events.on(engine, 'beforeUpdate', updateGame);
 }
 
@@ -78,6 +71,7 @@ function handleResize() {
     ctx.imageRendering = 'pixelated';
 }
 
+// --- Terrain Generation ---
 function noise(x) {
     const y = Math.sin(x) * 10000;
     return y - Math.floor(y);
@@ -91,211 +85,162 @@ function smoothNoise(x) {
 }
 
 function getTerrainHeight(x) {
-    // More complex noise for "bumps and jumps"
     const val1 = smoothNoise(x * CONFIG.terrainSmoothness + noiseSeed);
-    const val2 = smoothNoise(x * CONFIG.terrainSmoothness * 5 + noiseSeed + 100); // Higher freq detail
-    // Mix large hills (val1) with choppy bumps (val2)
-    const rawHeight = (val1 * 300) + (val2 * 50);
-    return Math.floor(rawHeight / CONFIG.pixelScale) * CONFIG.pixelScale;
+    const val2 = smoothNoise(x * CONFIG.terrainSmoothness * 5 + noiseSeed + 100);
+    const rawHeight = (val1 * 300) + (val2 * 80);
+    return rawHeight; // No quantization needed for physics, looks smoother
 }
 
 function generateTerrainChunk() {
     const startX = lastTerrainX;
     const endX = startX + CONFIG.chunkWidth;
-    const segmentWidth = 10; // Finer segments for smoother curve
+    const segmentWidth = 20; // Distance between points (fidelity)
 
-    const vertices = [];
-    vertices.push({ x: startX, y: 2000 }); // Bottom left (deep down)
+    let prevX = startX;
+    let prevY = 400 + getTerrainHeight(startX);
 
-    // Generate top surface points
-    for (let x = startX; x <= endX; x += segmentWidth) {
-        let y = 400 + getTerrainHeight(x);
-        vertices.push({ x: x, y: y });
-    }
+    const chunkBodies = [];
+    const chunkPath = []; // For rendering single line
 
-    vertices.push({ x: endX, y: 2000 }); // Bottom right
+    for (let x = startX + segmentWidth; x <= endX; x += segmentWidth) {
+        let currentY = 400 + getTerrainHeight(x);
 
-    const ground = Bodies.fromVertices(
-        (startX + endX) / 2,
-        1200, // Center Y approx
-        [vertices],
-        {
+        // Create a segment connecting prev point to current point
+        const midpointX = (prevX + x) / 2;
+        const midpointY = (prevY + currentY) / 2;
+        const length = Math.hypot(x - prevX, currentY - prevY);
+        const angle = Math.atan2(currentY - prevY, x - prevX);
+
+        const segment = Bodies.rectangle(midpointX, midpointY, length + 2, 20, { // Thick floor for safety
             isStatic: true,
-            friction: 1.0, // High friction for grip
-            label: "ground"
-        },
-        true
-    );
+            angle: angle,
+            friction: 1.0,
+            frictionStatic: 10,
+            label: "ground",
+            render: { visible: false } // We draw manually
+        });
 
-    // Store the "Top Surface" vertices for rendering explicitly
-    // Matter.js decomposes vertices, so we can't trust body.vertices to be the exact line we drew.
-    // We'll attach the drawing path directly to the body object for our renderer.
-    ground.renderPath = [];
-    for (let x = startX; x <= endX; x += segmentWidth) {
-        let y = 400 + getTerrainHeight(x);
-        ground.renderPath.push({ x, y });
+        World.add(world, segment);
+        chunkBodies.push(segment);
+        chunkPath.push({ x: prevX, y: prevY });
+
+        prevX = x;
+        prevY = currentY;
     }
+    // Add last point to path
+    chunkPath.push({ x: prevX, y: prevY });
 
-    World.add(world, ground);
-    terrainBodies.push(ground);
+    // Store the bodies and the path for rendering
+    terrainBodies.push({ bodies: chunkBodies, path: chunkPath });
     lastTerrainX = endX;
 }
 
-function createCar(x, y) {
-    const group = Body.nextGroup(true);
-
-    const wheelSpec = {
-        collisionFilter: { group: group },
-        friction: 0.9,
-        restitution: 0.0, // Less bouncy wheels, more grip
-        density: 0.05
-    };
-
-    // Chassis
-    const chassis = Bodies.rectangle(x, y - 20, 50, 24, {
-        collisionFilter: { group: group },
-        density: 0.1, // Heavier chassis
-        label: "car"
+// --- Player (Rolling Ball) ---
+function createPlayer(x, y) {
+    playerBody = Bodies.circle(x, y - 50, CONFIG.ballSize, {
+        friction: 1.0,         // Max grip
+        frictionAir: 0.001,
+        restitution: 0.0,      // No bounce to keep contact
+        density: 0.2,          // Heavier for momentum
+        label: "player"
     });
-
-    // Wheels
-    carWheelB = Bodies.circle(x - 20, y + 10, 12, wheelSpec);
-    carWheelF = Bodies.circle(x + 20, y + 10, 12, wheelSpec);
-
-    // Suspension
-    const stiffness = 0.15;
-    const damping = 0.2; // More damping to stop springing uncontrollably
-
-    const axelB = Constraint.create({
-        bodyA: chassis,
-        bodyB: carWheelB,
-        pointA: { x: -20, y: 10 },
-        stiffness: stiffness,
-        damping: damping,
-        length: 5
-    });
-
-    const axelF = Constraint.create({
-        bodyA: chassis,
-        bodyB: carWheelF,
-        pointA: { x: 20, y: 10 },
-        stiffness: stiffness,
-        damping: damping,
-        length: 5
-    });
-
-    carBody = Composite.create();
-    Composite.add(carBody, [chassis, carWheelB, carWheelF, axelB, axelF]);
-    World.add(world, carBody);
+    World.add(world, playerBody);
 }
 
 function jump() {
-    if (!carBody) return;
-    const chassis = carBody.bodies[0];
-    // Strong upward force
-    Body.applyForce(chassis, chassis.position, { x: 0, y: -CONFIG.jumpForce });
-
-    // Small torque to pitch up slightly
-    Body.setAngularVelocity(chassis, chassis.angularVelocity - 0.05);
-
+    if (!playerBody) return;
+    // Simple vertical impulse
+    Body.applyForce(playerBody, playerBody.position, { x: 0, y: -CONFIG.jumpForce });
     playJumpSound();
 }
 
 function updateGame() {
-    if (!carBody) return;
+    if (!playerBody) return;
 
-    // 1. Auto Drive
-    carWheelB.angularVelocity = CONFIG.carSpeed;
-    carWheelF.angularVelocity = CONFIG.carSpeed;
+    // 1. Roll Logic (Torque)
+    // We want the ball to roll forward. 
+    // Applying torque mimics a "motor" inside the ball.
+    // Or we can just set angular velocity.
 
-    // Limit Max Speed to prevent chaos
-    const maxSpeed = 30;
-    if (carWheelB.speed > maxSpeed) Body.setSpeed(carWheelB, maxSpeed);
-    if (carWheelF.speed > maxSpeed) Body.setSpeed(carWheelF, maxSpeed);
+    if (playerBody.angularVelocity < CONFIG.ballSpeed) {
+        playerBody.torque = CONFIG.ballTorque;
+    }
 
     // 2. Camera
-    const chassis = carBody.bodies[0];
-    const targetX = chassis.position.x;
+    const targetX = playerBody.position.x;
     const screenCenter = renderCanvas.width / 2;
     scrollOffset = -targetX + screenCenter;
 
-    // 3. Terrain Generation
-    if (chassis.position.x > lastTerrainX - CONFIG.chunkWidth * 2) {
+    // 3. Infinite Terrain
+    if (playerBody.position.x > lastTerrainX - CONFIG.chunkWidth * 2) {
         generateTerrainChunk();
     }
 
-    // Cleanup
-    if (terrainBodies.length > 8) {
-        const oldBody = terrainBodies.shift();
-        World.remove(world, oldBody);
+    // Cleanup chunks
+    if (terrainBodies.length > 5) {
+        const oldChunk = terrainBodies.shift();
+        World.remove(world, oldChunk.bodies);
     }
 
-    // 4. Audio & Reset
-    updateEngineSound(chassis.speed);
-
-    if (chassis.position.y > 3000) {
-        // Reset Car significantly above last know terrain X
-        Body.setPosition(chassis, { x: chassis.position.x, y: 0 });
-        Body.setVelocity(chassis, { x: 0, y: 0 });
-        Body.setAngularVelocity(chassis, 0);
-        Body.setPosition(carWheelB, { x: chassis.position.x - 20, y: 20 });
-        Body.setPosition(carWheelF, { x: chassis.position.x + 20, y: 20 });
+    // 4. Reset
+    if (playerBody.position.y > 2000) {
+        Body.setPosition(playerBody, { x: playerBody.position.x, y: 0 });
+        Body.setVelocity(playerBody, { x: 0, y: 0 });
+        Body.setAngularVelocity(playerBody, 0);
     }
+
+    // Sound
+    updateEngineSound(playerBody.angularSpeed * 10);
 }
 
+// --- Rendering ---
 function renderLoop() {
-    // Clear
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
 
     ctx.save();
 
-    const chassis = carBody.bodies[0];
     const centerY = renderCanvas.height / 2;
-
-    // Smooth camera follow on Y
-    const targetY = -chassis.position.y + centerY + 150;
-
-    // Simple lerp or just lock it for now to avoid jitter
+    // Follow Y loosely
+    const targetY = -playerBody.position.y + centerY + 100;
     ctx.translate(scrollOffset, targetY);
 
-    // Draw Terrain Lines
+    // Draw Terrain Line
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 4; // Thick pixel line
-    ctx.lineCap = 'square';
-    ctx.lineJoin = 'miter';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
 
-    terrainBodies.forEach(body => {
-        if (body.renderPath) {
-            ctx.beginPath();
-            const path = body.renderPath;
-            // Draw the line strip
+    terrainBodies.forEach(chunk => {
+        const path = chunk.path;
+        if (path.length > 0) {
             ctx.moveTo(path[0].x, path[0].y);
             for (let i = 1; i < path.length; i++) {
                 ctx.lineTo(path[i].x, path[i].y);
             }
-            ctx.stroke();
         }
     });
+    ctx.stroke();
 
-    // Draw Car
-    ctx.fillStyle = '#fff';
-    if (carBody) {
-        carBody.bodies.forEach(body => {
-            // Draw car parts as solid blocks
-            ctx.beginPath();
-            const v = body.vertices;
-            ctx.moveTo(v[0].x, v[0].y);
-            for (let j = 1; j < v.length; j++) {
-                ctx.lineTo(v[j].x, v[j].y);
-            }
-            ctx.lineTo(v[0].x, v[0].y);
-            ctx.fill();
-        });
+    // Draw Player Ball
+    if (playerBody) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        const pos = playerBody.position;
+        const r = CONFIG.ballSize;
+        ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Draw 'spokes' to see rotation
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+        ctx.lineTo(pos.x + Math.cos(playerBody.angle) * r, pos.y + Math.sin(playerBody.angle) * r);
+        ctx.stroke();
     }
 
     ctx.restore();
-
     requestAnimationFrame(renderLoop);
 }
 
@@ -307,20 +252,18 @@ function initAudio() {
 
     engineOsc = audioCtx.createOscillator();
     engineGain = audioCtx.createGain();
-
-    engineOsc.type = 'square';
+    engineOsc.type = 'triangle';
     engineOsc.frequency.value = 50;
     engineGain.gain.value = 0.0;
-
     engineOsc.connect(engineGain);
     engineGain.connect(audioCtx.destination);
     engineOsc.start();
 }
 
-function updateEngineSound(speed) {
+function updateEngineSound(param) {
     if (!audioCtx) return;
-    const baseFreq = 40;
-    const targetFreq = baseFreq + (speed * 8);
+    const baseFreq = 60;
+    const targetFreq = baseFreq + param * 20;
     engineOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
     engineGain.gain.setTargetAtTime(0.05, audioCtx.currentTime, 0.1);
 }
@@ -329,19 +272,15 @@ function playJumpSound() {
     if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-
     osc.type = 'square';
-    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
-    osc.frequency.linearRampToValueAtTime(300, audioCtx.currentTime + 0.1);
-
+    osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.1);
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-
     osc.start();
-    osc.stop(audioCtx.currentTime + 0.3);
+    osc.stop(audioCtx.currentTime + 0.2);
 }
 
 window.onload = init;
