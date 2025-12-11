@@ -1,0 +1,44 @@
+:root {
+    --bg-color: #111;
+    --fg-color: #fff;
+    --accent: #444;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--fg-color);
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', Courier, monospace;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+canvas {
+    display: block;
+    /* This is critical for the crisp 8-bit look */
+    image-rendering: pixelated; 
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+#instruction {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 16px;
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 10;
+    text-align: center;
+}
