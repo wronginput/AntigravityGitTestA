@@ -8,12 +8,12 @@ const CONFIG = {
     zoom: 1,
     chunkWidth: 1000,
     terrainRoughness: 100,
-    terrainSmoothness: 0.003,
+    terrainSmoothness: 0.002,
     // Ball Physics
-    ballSize: 15,
-    ballSpeed: 0.4, // Faster max rolling speed
-    ballTorque: 0.5, // 10x torque for climbing power
-    jumpForce: 0.35,
+    ballSize: 10,
+    ballSpeed: 1.2, // Faster max rolling speed
+    ballTorque: 5.5, // 10x torque for climbing power
+    jumpForce: 1.35,
 };
 
 // Global State
