@@ -20,7 +20,7 @@ let renderCanvas, ctx;
 let carBody, carWheelB, carWheelF;
 let terrainBodies = [];
 let scrollOffset = 0;
-let lastTerrainX = 0;
+let lastTerrainX = -800;
 let noiseSeed = Math.random() * 1000;
 
 // Audio Context
@@ -38,16 +38,16 @@ function init() {
     renderCanvas = document.createElement('canvas');
     ctx = renderCanvas.getContext('2d');
     document.body.appendChild(renderCanvas);
-    
+
     // Handle resize
     window.addEventListener('resize', handleResize);
     handleResize();
 
     // 3. Create Objects
     createCar(0, 0);
-    
+
     // Initial Terrain
-    for(let i=0; i<3; i++) {
+    for (let i = 0; i < 3; i++) {
         generateTerrainChunk();
     }
 
@@ -64,7 +64,7 @@ function init() {
     // 5. Run Loop
     runner = Runner.create();
     Runner.run(runner, engine);
-    
+
     // Custom Render Loop
     requestAnimationFrame(renderLoop);
 
@@ -120,7 +120,7 @@ function generateTerrainChunk() {
         (startX + endX) / 2,
         650, // Approximate center Y
         [vertices],
-        { 
+        {
             isStatic: true,
             friction: 0.8,
             render: { visible: true },
@@ -128,11 +128,11 @@ function generateTerrainChunk() {
         },
         true // Flag for flattening indices, important for concave shapes but terrain is mostly convex-ish top
     );
-    
+
     // Fix positioning after creation (Bodies.fromVertices centers based on Centroid)
     // We align it purely visually in render, but for physics we need to trust it matches
     // A simpler approach for infinite terrain is chain of trapezoids, but let's try this
-    
+
     World.add(world, ground);
     terrainBodies.push(ground);
     lastTerrainX = endX;
@@ -141,16 +141,16 @@ function generateTerrainChunk() {
 function createCar(x, y) {
     const group = Body.nextGroup(true);
 
-    const wheelSpec = { 
-        collisionFilter: { group: group }, 
+    const wheelSpec = {
+        collisionFilter: { group: group },
         friction: 0.9,
         restitution: 0.2, // Bouncy wheels
-        density: 0.01 
+        density: 0.01
     };
 
     // Chassis
     // Using a pixel art shape: a rectangle
-    const chassis = Bodies.rectangle(x, y - 20, 60, 20, { 
+    const chassis = Bodies.rectangle(x, y - 20, 60, 20, {
         collisionFilter: { group: group },
         density: 0.04,
         label: "car"
@@ -187,11 +187,11 @@ function createCar(x, y) {
 function jump() {
     if (!carBody) return;
     const chassis = carBody.bodies[0];
-    
+
     // Only jump if touching ground (approximate check: Vertical velocity is low)
     // Or just double jump for fun
     Body.applyForce(chassis, chassis.position, { x: 0, y: -CONFIG.jumpForce });
-    
+
     // Jump Sound
     playJumpSound();
 }
@@ -216,7 +216,7 @@ function updateGame() {
     if (chassis.position.x > lastTerrainX - CONFIG.chunkWidth * 2) {
         generateTerrainChunk();
     }
-    
+
     // Cleanup old chunks
     if (terrainBodies.length > 5) {
         const oldBody = terrainBodies.shift();
@@ -274,7 +274,7 @@ function renderLoop() {
     ctx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
 
     ctx.save();
-    
+
     // Apply Camera
     const chassis = carBody.bodies[0];
     const centerY = renderCanvas.height / 2;
@@ -307,12 +307,12 @@ function initAudio() {
     // Engine Sound Node
     engineOsc = audioCtx.createOscillator();
     engineGain = audioCtx.createGain();
-    
+
     engineOsc.type = 'square'; // 8-bit sound
     engineOsc.frequency.value = 50;
-    
+
     engineGain.gain.value = 0.0;
-    
+
     engineOsc.connect(engineGain);
     engineGain.connect(audioCtx.destination);
     engineOsc.start();
@@ -323,30 +323,30 @@ function updateEngineSound(speed) {
     // Pitch modulation based on speed
     const baseFreq = 60;
     const targetFreq = baseFreq + (speed * 10); // Speed usually 0-20
-    
+
     // Smooth transition
     engineOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
-    
+
     // Volume based on if we are moving? Always on for "Engine" feeling
     engineGain.gain.setTargetAtTime(0.1, audioCtx.currentTime, 0.1);
 }
 
 function playJumpSound() {
     if (!audioCtx) return;
-    
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    
+
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(200, audioCtx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
-    
+
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-    
+
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
+
     osc.start();
     osc.stop(audioCtx.currentTime + 0.1);
 }

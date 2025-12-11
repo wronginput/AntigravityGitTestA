@@ -1,0 +1,2 @@
+11th December 2025 - Cross-Platform Git Setup & Pixel Car Game
+Initialised a Git repository and synced it with GitHub for cross-platform development (PC/Mac). Created a procedural pixel art physics car game using Matter.js, featuring infinite terrain and synthesized audio.
